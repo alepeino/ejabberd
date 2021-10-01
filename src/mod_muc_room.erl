@@ -1674,7 +1674,8 @@ set_role(JID, Role, StateData) ->
 		   end, StateData#state.users, LJIDs),
 		 StateData#state.nicks}
 	end,
-    StateData#state{users = Users, nicks = Nicks}.
+    Roles = maps:put(jid:remove_resource(LJID), Role, StateData#state.roles),
+    StateData#state{users = Users, nicks = Nicks, roles = Roles}.
 
 -spec get_role(jid(), state()) -> role().
 get_role(JID, StateData) ->
@@ -2071,7 +2072,7 @@ add_new_user(From, Nick, Packet, StateData) ->
 	  Collision,
 	  mod_muc:can_use_nick(StateData#state.server_host,
 			       StateData#state.host, From, Nick),
-	  get_default_role(Affiliation, StateData)}
+	  get_occupant_initial_role(From, Affiliation, StateData)}
 	of
       {false, _, _, _} when NUsers >= MaxUsers orelse NUsers >= MaxAdminUsers ->
 	  Txt = ?T("Too many users in this conference"),
@@ -3920,6 +3921,8 @@ set_opts([{Opt, Val} | Opts], StateData) ->
                   StateData#state{muc_subscribers = MUCSubscribers};
 	    affiliations ->
 		StateData#state{affiliations = maps:from_list(Val)};
+	    roles ->
+		StateData#state{roles = maps:from_list(Val)};
 	    subject ->
 		  Subj = if Val == <<"">> -> [];
 			    is_binary(Val) -> [#text{data = Val}];
@@ -3927,7 +3930,9 @@ set_opts([{Opt, Val} | Opts], StateData) ->
 			 end,
 		  StateData#state{subject = Subj};
 	    subject_author -> StateData#state{subject_author = Val};
-	    _ -> StateData
+	    Other ->
+                  ?INFO_MSG("Unknown MUC room option, will be discarded: ~p", [Other]),
+                  StateData
 	  end,
     set_opts(Opts, NSD).
 
@@ -3945,6 +3950,18 @@ set_vcard_xupdate(#state{config =
     end;
 set_vcard_xupdate(State) ->
     State.
+
+get_occupant_initial_role(Jid, Affiliation, #state{roles = Roles} = StateData) ->
+    DefaultRole = get_default_role(Affiliation, StateData),
+    case (StateData#state.config)#config.moderated of
+        true ->
+            get_occupant_stored_role(Jid, Roles, DefaultRole);
+        false ->
+            DefaultRole
+    end.
+
+get_occupant_stored_role(Jid, Roles, DefaultRole) ->
+    maps:get(jid:split(jid:remove_resource(Jid)), Roles, DefaultRole).
 
 -define(MAKE_CONFIG_OPT(Opt),
 	{get_config_opt_name(Opt), element(Opt, Config)}).
@@ -3988,6 +4005,7 @@ make_opts(StateData) ->
       (?SETS):to_list((StateData#state.config)#config.captcha_whitelist)},
      {affiliations,
       maps:to_list(StateData#state.affiliations)},
+     {roles, maps:to_list(StateData#state.roles)},
      {subject, StateData#state.subject},
      {subject_author, StateData#state.subject_author},
      {hibernation_time, erlang:system_time(microsecond)},
